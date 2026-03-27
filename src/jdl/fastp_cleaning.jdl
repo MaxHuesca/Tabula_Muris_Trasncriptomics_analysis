@@ -1,0 +1,34 @@
+#!/usr/bin/env bash 
+#$ -cwd
+#$ -S /bin/bash
+#$ -o salida-$JOB_NAME-$JOB_ID.out
+#$ -e salida-$JOB_NAME-$JOB_ID.err
+#$ -q default
+#$ -pe smp 3
+#$ -l h_rt=01:00:00 
+
+#this script is used to put in the queue the fastp procces
+#Arguments
+#  $1: this is the path with the file it can be the first paired end or the unique srr file
+#  $2(optional): if the first argument is a paired end srr it should be followed for its pair  
+
+srr_1_file=$1
+#now we can make the outputs 
+out_1=${srr_1_file/_1/_1_clean}
+#and store the srr_id 
+srr_id=${srr_1_file##*/}
+srr_id=${srr_id%_*}
+
+if [[ $# > 1 ]]; then
+    srr_2_file=$2
+    out_2=${out_1/_1_clean/_2_clean}
+fi 
+
+#finally run the fastp program based on the end of the files  
+
+#if we asumed that it was a paired-end read we make sure the paired file exist 
+if [[ -f $srr_2_file ]]; then 
+    conda run -n fastp fastp -i $srr_1_file -o $out_1 -I $srr_2_file -O $out_2 -f 15 --dup_calc_accuracy 4 -j /dev/null -h results/fastqc/"$srr_id"/"$srr_id"_fastp.html -Q -L
+else 
+    conda run -n fastp fastp -i $srr_1_file -o $out_1 -f 15 --dup_calc_accuracy 4 -j /dev/null -h results/fastqc/"$srr_id"/"$srr_id"_fastp.html -Q -L
+fi

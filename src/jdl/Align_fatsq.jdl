@@ -1,0 +1,96 @@
+#!/bin/bash 
+#$ -cwd
+#$ -S /bin/bash
+#$ -o salida-$JOB_NAME-$JOB_ID.out
+#$ -e salida-$JOB_NAME-$JOB_ID.err
+#$ -q default
+#$ -pe smp 3
+#$ -l h_rt=10:00:00 
+
+#this script is used to put in the queue the fastp procces
+#Arguments
+#  -S: The SRR id 
+#  -t: the path to the temporary folder where the fastp outputs will be stored
+#  -e: the path to the the standar errors
+#  -c: Use the Clean files instead of the the Raw ones  
+
+clean=false
+
+while getopts "S:t:e:c" opt; do
+  case $opt in
+    S) SRR_id="$OPTARG" ;;
+    t) temp_pth="$OPTARG" ;;
+    e) err_pth="$OPTARG" ;;
+    c) clean=true ;;
+    *) echo "Invalid option: -$OPTARG" ;;
+  esac
+done
+
+shift $((OPTIND - 1))
+
+#verify it has provided the SRR id
+if [[ -z "${SRR_id:-}" ]]; then
+    echo "Error: SRR id is required. Use -S to specify the SRR id."
+    exit 1
+fi 
+
+#verify the values of the optional arguments
+if [[ -z "${temp_pth:-}" ]]; then
+    temp_pth="temp_align/"
+fi
+
+if [[ -z "${err_pth:-}" ]]; then
+    err_pth="${temp_pth}align_errors/"
+fi
+
+#build the data path 
+data_path=data/"$SRR_id"/
+
+#Fisrt we construct the paths of the fastq files 
+if [[ $clean == true ]]; then  
+    SRR_1="$data_path""$SRR_id"_1_clean.fastq
+    SRR_2="$data_path""$SRR_id"_2_clean.fastq
+else
+    SRR_1="$data_path""$SRR_id"_1.fastq
+    SRR_2="$data_path""$SRR_id"_2.fastq
+fi
+
+mkdir -p "$temp_pth"
+mkdir -p "$err_pth" 
+
+
+#Now we can make the alignmets with both aligner and in the pair and unpaired format 
+#=====================================================================
+#STAR
+#=====================================================================
+
+#for paired reads 
+job1="${SRR_id}_${JOB_ID}_strPR"
+qsub -N "$job1" -o "${err_pth}${job1}.out" -e "${err_pth}${job1}.err" "$temp_pth"star_pr.sh $SRR_id $SRR_1 $SRR_2
+
+job2="${SRR_id}_${JOB_ID}_strUN"
+qsub -N "$job2" -o "${err_pth}${job2}.out" -e "${err_pth}${job2}.err" "$temp_pth"star_un.sh $SRR_id $SRR_1
+
+
+
+#=====================================================================
+#HIsat2
+#=====================================================================
+
+#Paired read
+
+job3="${SRR_id}_${JOB_ID}_hiPR"
+qsub -N "$job3" -o "${err_pth}${job3}.out" -e "${err_pth}${job3}.err" "$temp_pth"hisat_pr.sh $SRR_id $SRR_1 $SRR_2
+
+job4="${SRR_id}_${JOB_ID}_hiUN"
+qsub -N "$job4" -o "${err_pth}${job4}.out" -e "${err_pth}${job4}.err" "$temp_pth"hisat_un.sh $SRR_id $SRR_1 $SRR_2 
+
+
+#Finally parsed the data
+echo "conda run -n bio_informatics python src/parsed_outs.py -s ${SRR_id} -p ${temp_pth}" | \
+qsub \
+  -N "parse_${SRR_id}" \
+  -cwd \
+  -o "${err_pth}${SRR_id}_parse.out" \
+  -e "${err_pth}${SRR_id}_parse.err" \
+  -hold_jid "$job1,$job2,$job3,$job4"

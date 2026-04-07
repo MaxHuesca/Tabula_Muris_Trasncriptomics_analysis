@@ -1,0 +1,25 @@
+#ignore all the large files that could be contained in the data proccesing and dowload 
+#========================================================================
+#Large files from the data directory 
+#========================================================================
+data/*.fastq
+data/*.gz 
+data/SRR*
+data/indexes
+#========================================================================
+#Results large files 
+#========================================================================
+results/alignments/*.bam
+results/alignments_raw/*.bam
+results/alignments/*.sam
+results/alignments_raw/*.sam
+#========================================================================
+#general extensions of large files or temporary ones
+#========================================================================
+*.out
+*.err
+*.bam 
+*.sam
+*.gz 
+*.fastq 
+temp*

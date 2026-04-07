@@ -1,4 +1,5 @@
 #!/usr/bin/env bash 
+#Ensure robusteness
 set -e # Only to ensure scrpt executions
 set -u # To avoid undefined variables usage
 set -o pipefail # To avoid failed runs
@@ -6,7 +7,8 @@ set -o pipefail # To avoid failed runs
 #Make the fastqc reports for fastq files 
 #Arguments: 
 #   $1: directory path with the SRR directories files 
-#   $2: Optional argument for a specific output dir   
+#   $2: Optional argument for specifing the sufix of the SRR files
+#   $3: Optional argument for a specific output dir     
 #The script generate one directory with all the fastqc report on zip and html format
 
 # Check that a path argument was provided
@@ -17,29 +19,39 @@ fi
 
 data_path="$1"
 
+if [[ $# -ge 2 ]]; then 
+    sufix=$2 
+else 
+    sufix=fastqc
+fi 
 
 #if the user specified a output dir 
-if [[ $# > 2 ]]; then 
-    output_dir=$2 
+if [[ $# -ge 3 ]]; then 
+    output_dir=$3
 else 
     output_dir=results/fastqc
 fi 
 
+
+
 # Create a directory for FastQC results"
 mkdir -p "$output_dir"
 #make the multiqc list file
-multi="$output_dir/multiqc_list"
+multi="$output_dir"/multiqc_"$sufix"_list
 touch $multi
 
 # Iterate over all SRR directories inside the data path
 for dir in "$data_path"/*/; do
     #extarct the id of the SRR files 
-    srr_id="${dir%%*}"
+    srr_id="${dir%/*}"
+    srr_id="${srr_id##*/}"
     # Run FastQC on all FASTQ files in the directory
-    fastqc -t 4 -o "$output_dir/$srr_id" "$dir"/*fastq*
+    out_srr="$output_dir/$srr_id"
+    mkdir -p "$out_srr"
+    fastqc -t 4 -o "$out_srr" "$dir"*"$sufix"*
     #now we can save the directory to file to provied to the multiqc analysis
-    echo "${$output_dir/$srr_id}" >> $multi
+    echo "$out_srr" >> $multi
 done 
 
 #finally we can do the multiqc report 
-multiqc --file-list "$multiqc_list" --outdir "$output_dir" 
+multiqc --file-list "$multi" --outdir "$output_dir" -i multiqc_"$sufix"

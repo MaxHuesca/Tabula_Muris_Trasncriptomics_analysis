@@ -1,0 +1,241 @@
+
+---
+title: "Alignment of sequences"
+jupyter: bio_informatics
+---
+## Alignment 
+When you have the data clean and pre-proccesed we can asces the next step in the data processing, formaly we are talking about the alignment of the sequences to the reference genome, this references can be obtain by diferent data bases (like [Genecode](https://www.gencodegenes.org)) and it can have annotatations of the genes, this is highly depended in the study coverage of the genome, for our fortune we are working with one of the animal models used to study human. The *mus musculus* genome index is the [m36](https://www.gencodegenes.org/mouse/release_M36.html) realese available in genecode and indexed with the diferents programs that we are utilizing (hisat2 and star). 
+
+## Comparison betwen aligners 
+Whenn you are doing a Diferential expression analysis starting with the raw sequence data a key step in the data processing is the alignment to the reference genome, this is curcial because is the step where the information stored in the sequence data takes a biological sense in the way that we can identified what genomic possition the read is refering to (in so many cases genes) and this identification is the milestone in the conslusion we can made in the following analysis. 
+
+For the above reasons it is important to compare diferent alignment tools not only for avoid the information lost also to make sure this information is sustented, it is known that there is not a perfect aligner and all alignments can not cover the 100% of the expression data, so the solution is to find the aligner that fits better to the experiemnt you are mading. 
+
+Here we analice the performance of two well characterized and widely used alignenment-tools in RNA-seq data `STAR` and `hisat2` in contrast with the use of paired and unpaired data. 
+
+For this we are going to use only the first SRR of the paired data of one alignment (in both tools) and then make the paired alignment also in both tools 
+
+```{python set_up}
+#| echo=false
+
+# chargue the libraries
+import pandas as pd
+import subprocess as sp
+import os
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+
+# first we load the metadata specific of our samples
+metadata_df = pd.read_csv("data/Meatadata_male_bone_1_24M.tsv", sep="\t")
+SRR_ids = list(metadata_df["srr_id"])
+``` 
+
+When parsing hisat2 output: 
+Total aligned: The percentage of all the reads aligned  'Overall alignment rate'
+Non aligned: the sum of the reads 'Aligned concordantly or discordantly 0 time' and 'Aligned 0 time'
+Unique aligned: the sum of the reads 'Aligned concordantly 1 time' and 'Aligned 1 time' 
+Multimaped: The sum of the reads that were'Aligned discordantly 1 time' and 'Aligned >1 times'
+Time: the total time from the table met report  
+
+For parsing the star output:
+Total aligned: The division bewtwen the sum of 'Uniquely mapped reads number ' and 'Number of reads mapped to multiple loci ' and 'Number of input reads '
+Non aligned: the sum of the reads  and 'Number of reads unmapped: other ', 'Number of reads unmapped: too short ' and 'Number of reads unmapped: too many mismatches '
+Unique aligned: 'Uniquely mapped reads number '
+Multimaped: The sum of the reads that were 'Number of reads mapped to multiple loci ' and 'Number of reads mapped to too many loci '
+Time: The diference between 'Started mapping on ' and 'Finished on '
+
+
+>with that information we can run the alignments while we parse the aligner results: 
+
+### Clean data 
+
+```{python run_align}
+#| eval=false
+# Create the scsipts for the temporary paths
+sp.run(["bash", "src/Generate_tempAlign.sh"])
+
+for srr in SRR_ids:
+    sp.run(["qsub", "src/jdl/Align_fatsq.jdl", "-S", srr, "-c"])
+```
+
+### Raw data
+
+```{python}
+#| eval=false
+sp.run(
+    [
+        "bash",
+        "src/Generate_tempAlign.sh",
+        "-t",
+        "temp_align_raw/",
+        "-r",
+        "results/alignments_raw/",
+    ]
+)
+
+for srr in SRR_ids:
+    sp.run(
+        [
+            "qsub",
+            "src/jdl/Align_fatsq.jdl",
+            "-S",
+            srr,
+            "-t",
+            "temp_align_raw/",
+            "-r",
+            "results/alignments_raw/",
+            "-e",
+            "align_errors_raw/",
+        ]
+    )
+``` 
+
+### Merge the temporary results 
+```{bash merge}
+#| eval=false
+#we have all the temporary dataframes in the temporary path in the specific directory "parsed_results so we have to read every hisat and star result a merge it "
+
+#obtain the header 
+path_temp=temp_align_raw/parsed_results/
+header=$(head -1 "$path_temp"$(ls "$path_temp" | head -1))
+
+#hisat
+echo "$header" > results/alignments_raw/alignments_parsed.csv
+for temp_parse in "$path_temp"*.csv; do
+    awk 'NR!=1' $temp_parse >> results/alignments_raw/alignments_parsed.csv
+done
+
+
+```
+
+## Analysis 
+With the performance data provided by the aligners we can see the diferrences not only between aligners also between paired and unpaired data. 
+
+### Total aligned vs time 
+The most common metric to evaluate the performance of an aligner is the total aligned reads, this is a key metric because it gives us an idea of how much information we are loosing in the alignment step, but also is important to evaluate the time that the aligner takes to do the alignment because this can be a bottleneck in the data processing.
+```{python analysis}
+# fist we read the tables
+Clean_df = pd.read_csv("results/alignments/alignments_parsed.csv")
+Raw_df = pd.read_csv("results/alignments_raw/alignments_parsed.csv")
+
+# ========================================================================
+# Total aligned vs time
+# ========================================================================
+
+label_colors = {"hisat": "#161fcfff", "star": "#d11313ff"}
+
+fig_scater, axes = plt.subplots(1, 2, figsize=(10, 6))
+fig_scater.set_facecolor("#d7ecfff1")
+sns.scatterplot(
+    data=Raw_df,
+    x="Total_aligned",
+    y="Time(min)",
+    hue="aligner",
+    palette=label_colors,
+    style="Type",
+    ax=axes[0],
+)
+axes[0].set_title("Total aligned vs time_Raw data")
+axes[0].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+axes[0].grid(True, linestyle="--", alpha=0.5)
+axes[0].set_facecolor("#7a6ab949")
+
+sns.scatterplot(
+    data=Clean_df,
+    x="Total_aligned",
+    y="Time(min)",
+    hue="aligner",
+    palette=label_colors,
+    style="Type",
+    ax=axes[1],
+)
+axes[1].set_title("Total aligned vs time_Clean data")
+axes[1].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+axes[1].grid(True, linestyle="--", alpha=0.5)
+axes[1].set_facecolor("#7a6ab949")
+
+plt.tight_layout()
+plt.show()
+``` 
+
+We can see that hisat has a constant time of performance, this does not tell us so much about the cost in aligning paired or unpaired data, in the other hand we can note that the cost in time for star has a important difference between paired and unpaired data, something interesting is that even the more time used and consequently the more computational resources are used the less total aligned reads are, this can have so many reasons, one is that there are so many multimapped reads that does not represent a trouble when aligning unpaired reads but are better discriminated when using paired data, so other matrics like the unique aligned reads or multimaped reads can give us more insights about the noise the unpaired data is adding to the alignment. 
+
+Other thing interesting in this case is that Star has a better performance using unpaired reads having more total aligned reads than hisat, even in less time, but whn using paired data the diferrence in total aligned reads does not seem to be big so the in terms of time hisat is better, but we have to see the other matrics to have a better idea of the performance of the aligners. 
+
+Finally the use of clean or raw data appears to not have a big impact in the total aligned reads, but it is important to note that the time used for the alignment is higher when using raw data, this can be due to the fact that the aligner has to deal with more noise in the data and this can make the alignment process more complex and consequently more time consuming, also some samples like `SRR9126859` and `SRR9127010` were imposible to map using hisat2 in raw data so we continue the further analysis with the clean-data alignments.
+
+### Multimapping
+
+For seeing why this difference between paired and unpaired reads number of relative mapped reads we can view the non aligned and multimaped reads, this can give us an idea of how much noise the unpaired data is adding to the alignment and how much of this noise is being discriminated when using paired data, this is important beacuse this noise could be false positive mapped reads to those genomics locations.
+
+```{python multimaped}
+hisat_df = Clean_df[Clean_df["aligner"] == "hisat"]
+star_df = Clean_df[Clean_df["aligner"] == "star"]
+
+label_colors = {"UN": "#161fcfff", "PR": "#d11313ff"}
+
+fig_scater, axes = plt.subplots(2, 2, figsize=(10, 6))
+fig_scater.set_facecolor("#e0eef2f1")
+sns.scatterplot(
+    data=hisat_df,
+    x="Multimaped",
+    y="Non_aligned",
+    hue="Type",
+    palette=label_colors,
+    ax=axes[0][0],
+)
+axes[0][0].set_title("Multimapped vs Non aligned reads hisat2")
+axes[0][0].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+axes[0][0].set_facecolor("#f0c5e3c2")
+
+sns.scatterplot(
+    data=hisat_df,
+    x="Multimaped",
+    y="Unique_aligned",
+    hue="Type",
+    palette=label_colors,
+    ax=axes[1][0],
+)
+axes[1][0].set_title("Multimapped vs Unique Aligned reads hisat2")
+axes[1][0].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+axes[1][0].set_facecolor("#f0c5e3c2")
+
+sns.scatterplot(
+    data=star_df,
+    x="Multimaped",
+    y="Non_aligned",
+    hue="Type",
+    palette=label_colors,
+    ax=axes[0][1],
+)
+axes[0][1].set_title("Multimapped vs Non aligned reads star")
+axes[0][1].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+axes[0][1].set_facecolor("#f0c5e3c2")
+
+sns.scatterplot(
+    data=star_df,
+    x="Multimaped",
+    y="Unique_aligned",
+    hue="Type",
+    palette=label_colors,
+    ax=axes[1][1],
+)
+axes[1][1].set_title("Multimapped vs Unique Aligned reads star")
+axes[1][1].legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+axes[1][1].set_facecolor("#f0c5e3c2")
+
+plt.tight_layout()
+plt.show()
+```
+
+As the scatter plots show the use of paired reads as it is suposed to be seems to have a "robust" alignment having more toruble in solving those sequences that are multimapped, this reflects the higher number of non aligned reads when using paired reads, it can be see as a more cofident alignment but comparing this multimaped sequences with the unique aligned reads we can see that even the use of unpaired reads has a high rate of unique mapped reads it also has a high rate of multimaped reads, this can be a problem because these multimaped reads can be false positives and can add noise to the data, this is something that is being discriminated when using paired reads, so the use of paired reads seems to be more accurate in the alignment process. 
+
+In this case we can see a clear trade off between the use of paired and unpaired reads, being the paired reads a more conservative approach but loosing some infomartion that the unpaired reads keep but with the risk of those multimapped reads that can be noise that the bivalent information of the paired reads can help to discriminate. 
+
+Finally we can see that star has a better performance than hisat2, this because it has more unique aligned reads and less multimaped reads, so even to the more strict aligment it recovers more unique aligned reads with similar levels of multimapped ones. 
+
+### Conclusion 
+It is a fact that the time and resources invested in paired data aligment is higher than that for unpaired ones, so the question is clear, does it worth to invest this time and resources in the paired data aligment? Something clear is that this investment that in the most cases also involves more expensive experimental desings have a clear improve reducing multimapped reads that can be noise in the data, so the desision of using paired or unpaired data in the alignment step is a trade off between the time and resources invested and the accuracy of the alignment, so it is important to evaluate the specific needs of the experiment and the resources available before making a decision then the data also show us that the selection of the aligner coud be determinat in this king of trade offs and that is also experiment depedent desicion. 
+
+In thiscase we can see that two of the most used aligners does not have a determinat deiference in selecting one or another, but it can be viewed that star has a better performance in the paired data that could be in order of the time and reosurcers expended in those alignments, in the other hand we can se that although star has clearly a better total of alignment-time performance in unpaired data, the multimapping evidence can tell us that using hisat could be a better desicion with a not a big diference also with it constant time performance.

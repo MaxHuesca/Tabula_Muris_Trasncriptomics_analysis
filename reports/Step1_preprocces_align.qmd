@@ -1,21 +1,25 @@
-
 ---
-title: "Alignment of Sequences"
+title: "Report 1 Preproccesing and aligment od the sequences"
 author: "Ismael Maximiliano De Los Santos Huesca"
 date: today
 
 format:
   pdf:
+    include-before-body: portada.tex
     documentclass: article
     geometry: margin=2cm
     fontsize: 10pt
     number-sections: true
-    toc: false
     fig-cap-location: bottom
+    df-print: kable
+    toc: true
+    toc-title: "Table of Contents"
 
 execute:
   warning: false
   message: false
+  echo: true
+  eval: false
   freeze: auto
 
 project:
@@ -33,8 +37,184 @@ header-includes:
   - \usepackage{float}
   - \usepackage{caption}
   - \captionsetup{font=small}
----
-## Alignment 
+--- 
+\newpage
+
+# Download 
+
+This script is used to download and preprocess the raw sequencing data from the RNA-seq experiments of the [Ageing hallmarks exhibit organ-specific temporal signatures](https://www.nature.com/articles/s41586-020-2499-y). Here, we focus on the male samples, particularly on the bone tissue at 1 and 24 age stages:
+
+```{python, set_up}
+# | echo: false
+# | eval: true
+
+import pandas as pd 
+import subprocess as subP 
+import os 
+``` 
+
+## Download data 
+To access the data download, we use the program `fasterq-dump`. This is already installed in the Chaac server, so we can use subprocess from Python in order to make the download. To do so, we need the metadata for the experiment; this is stored in the GEO accession number [GSE132040](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132040).
+
+```{bash, obtain_metadata}
+#Download the metadata table
+wget https://ftp.ncbi.nlm.nih.gov/geo/series/GSE132nnn/GSE132040/suppl/ \
+GSE132040%5FMACA%5FBulk%5Fmetadata.csv.gz -O data/Tabula_Muris_GSE_metadata.csv.gz 
+
+gunzip data/Tabula_Muris_GSE_metadata.csv.gz
+``` 
+
+```{python, filter_meta}
+# | results: asis
+# | echo: false
+# | eval: true
+
+# first we have to obtain the srr ids wityh the metada
+metadata_GSE = pd.read_csv("data/Tabula_Muris_GSE_metadata.csv")
+
+print("The columns present in the metadata are:\n")
+for col in metadata_GSE.columns:
+    print(f"- {col}")
+
+# we have to focus in the 'characteristics: age' , 'characteristics: sex' and 'source name'
+metadata_bone_GSE = metadata_GSE[
+    (metadata_GSE["characteristics: age"].isin(["1", "24"]))
+    & (metadata_GSE["characteristics: sex"] == "m")
+    & (metadata_GSE["source name"].str.contains("bone", case=False))
+]
+print(
+    f"The organims from who the samples come form is {list(metadata_bone_GSE['organism'].drop_duplicates())}"
+)
+
+SRR_bone_dict = metadata_bone_GSE.set_index("Sample name")["raw file"].to_dict()
+# now we can obtain the data that we interesd to us (SRR files)
+for experiment in SRR_bone_dict.items():
+    print(f"The SRR id for the experiment {experiment[0]} is {experiment[1]}")
+
+SRR_boneM = list(SRR_bone_dict.values())
+
+print("So the SRR ids are:\n")
+for srr_id in SRR_boneM:
+    print(f"- {srr_id}")
+```
+
+With the IDs now we can download them 
+
+```{python, Download}
+for srr in SRR_boneM:
+    subP.run(["qsub", "-N", f"Download_{srr}", "src/jdl/Download.jdl", srr])
+```
+
+# Preproscessing
+
+The downloaded files are in `fastq` format. This is the general file format for short sequence data. The characteristics of this kind of file are that it not only contains the nucleotide sequence resulting from the sequencing reaction, but also has more properties such as the corresponding score for every nucleotide that is sequenced and the IDs for each sequence, having a total of 4 lines for each read sequenced. With this information provided by this format, we can deliver a FastQC (quality control) report with the objective of having the following statistics of our sequences:
+
+- **Per Base sequence quality**
+- **Per tile sequence quality** 
+- **Per sequence quality scores** 
+- **Per base sequence content** 
+- **Per sequence GC content** 
+- **Per base N content** 
+- **Sequence Duplication Levels** 
+
+This information in the reports is critical not only for knowing if the sequencing reaction procedure was done correctly, but also helps us to make decisions like trimming those bases that could have a low quality at the end or start of our sequences (as it frequently occurs with Illumina sequences).
+```{bash, fastqc}
+#make the fastqc reports 
+qsub -N fastqc_report src/jdl/fastqc_rep.jdl data/
+```
+
+With the analysis product of the FastQC and MultiQC reports, we can make decisions about the preprocessing of the data:
+
+![fastqc_per_base_sequence_quality_plot.png](../results/fastqc/fastqc_per_base_sequence_quality_plot.png) 
+
+After reviewing all the FastQC reports in the HTML view, we can see that the statistics related to the base quality and the sequence length are constant over all the samples and with good results, without having neither low scores nor inconstant sequence lengths. These results are characteristic of current NGS.
+
+## Possible problems
+
+### Base content
+![fastqc_per_base_sequence_content_plot.png](../results/fastqc/fastqc_per_base_sequence_content_plot.png) 
+
+![fastqc_per_sequence_gc_content_plot.png](../results/fastqc/fastqc_per_sequence_gc_content_plot.png)
+
+One of the first problems we can see across all the samples is the base content related to the first bases in the reads. We can see that the base sequence content is very inconstant, having no proportional content of bases in a 1-15 range. As this problem is constant in all the libraries, it can be solved by trimming the sequences in their first base pairs.
+
+```{bash, clean_fastp}
+#first iterarte over de data directory 
+for srr_dir in data/*/; do
+    #extract the SRR id 
+    srr_id="${srr_dir%/*}"
+    srr_id="${srr_id##*/}"
+    echo "Procesing the $srr_id fastq files"
+    #iterate over the files that are in the SRR directory 
+    for srr in "$srr_dir"*.fastq; do
+        #now we check if it is the paired end file
+        if [[ $srr == *_1.fastq* ]];then 
+            #we assume taht it has it paired file so we can obtain the id 
+            paired_1=$srr
+            paired_2=${paired_1/_1.fastq/_2.fastq}
+            echo "Files to be proccesed $paired_1 and $paired_2" 
+            qsub -N "$srr_id"_cleaning src/jdl/fastp_cleaning.jdl $paired_1 $paired_2
+            break
+        else 
+            #we are proccesing a unpaired-end file 
+            qsub -N "$srr_id"_cleaning src/jdl/fastp_cleaning.jdl $srr
+        fi
+    done 
+done
+```
+
+### Duplication and overrepresented sequences 
+![fastqc_sequence_duplication_levels_plot.png](../results/fastqc/fastqc_sequence_duplication_levels_plot.png)
+
+![fastqc_overrepresented_sequences_plot.png](../results/fastqc/fastqc_overrepresented_sequences_plot.png)
+Another warning that all our samples have is the duplication level of sequences. We can see that this statistic can reach 72% of all the reads in some samples. Also, the majority of the SRR files have overrepresented sequences, with only those from the IDs SRR9127396 and SRR9127010 being the ones that do not have this problem.
+
+![fastqc_adapter_content_plot.png](../results/fastqc/fastqc_adapter_content_plot.png)
+In general, all the samples do not have a significant adapter content, with only two having a little representation of Nextera transposase sequence (SRR9126859 and SRR9127369). Despite this, it does not arise a warning.
+
+\newpage
+
+## General results 
+![fastqc-status-check-heatmap.png](../results/fastqc/fastqc-status-check-heatmap.png)
+In this heatmap representing the problems across the SRR files, we can see that all the warnings are consistent across all the samples with few exceptions that we discussed above. So this gives us the first insight that our data is comparable, obviously with the precise normalization methods and preprocessing ones.
+
+Now we make another time the QC report with the data processed by fastp.
+
+```{bash, fastqc_2}
+#make the fastqc reports 
+qsub -N fastqc_report src/jdl/fastqc_rep.jdl data clean.fastq results/fastqc/fastp
+``` 
+
+We can see in the FastQC reports that the new trimmed sequences have improved at the start of all sequences after removing the first 15 base pairs of all our SRR files.
+
+Once we have the files processed, we can start with the alignments of the data, so we finally save the relevant information such as the metadata table of our specific samples. 
+```{python, saving}
+# | echo: false
+# | eval: true
+
+meta_clean = metadata_bone_GSE[
+    [
+        "Sample name",
+        "source name",
+        "characteristics: age",
+        "raw file",
+        "BioSample",
+    ]
+]
+meta_clean.columns = ["src", "name", "months", "srr_id", "biosample"]
+meta_clean["plate"] = meta_clean["src"].str.split("_").str[2]
+meta_clean.to_csv("data/Meatadata_male_bone_1_24M.tsv", sep="\t", index=False)
+
+print(f"The metadata tables looks: \n")
+display(meta_clean.style.hide(axis="index"))
+``` 
+
+Now we this pre-proccesed data and the metada data allready saved we can start with the next step, the same that is align the reads to a reference genome or in other words make all the reads sequenced to have sense in biological terms in the form that they have identification as places in the reference genome of the specie they came from. 
+
+\newpage
+
+# Alignment 
+
 When you have the data clean and pre-proccesed we can asces the next step in the data processing, formaly we are talking about the alignment of the sequences to the reference genome, this references can be obtain by diferent data bases (like [Genecode](https://www.gencodegenes.org)) and it can have annotatations of the genes, this is highly depended in the study coverage of the genome, for our fortune we are working with one of the animal models used to study human. The *mus musculus* genome index is the [m36](https://www.gencodegenes.org/mouse/release_M36.html) realese available in genecode and indexed with the diferents programs that we are utilizing (hisat2 and star). 
 
 ## Comparison betwen aligners 
@@ -47,8 +227,9 @@ Here we analice the performance of two well characterized and widely used aligne
 For this we are going to use only the first SRR of the paired data of one alignment (in both tools) and then make the paired alignment also in both tools 
 
 
-```{python set_up}
+```{python, set_up}
 # | echo: false
+# | eval: true
 
 # chargue the libraries
 import pandas as pd
@@ -63,29 +244,38 @@ metadata_df = pd.read_csv("data/Meatadata_male_bone_1_24M.tsv", sep="\t")
 SRR_ids = list(metadata_df["srr_id"])
 ``` 
 
+
 When parsing hisat2 output: 
-Total aligned: The percentage of all the reads aligned  'Overall alignment rate'
-Non aligned: the sum of the reads 'Aligned concordantly or discordantly 0 time' and 'Aligned 0 time'
-Unique aligned: the sum of the reads 'Aligned concordantly 1 time' and 'Aligned 1 time' 
-Multimaped: The sum of the reads that were'Aligned discordantly 1 time' and 'Aligned >1 times'
-Time: the total time from the table met report  
+
+- **Total aligned**: The percentage of all the reads aligned 'Overall alignment rate'
+
+- **Non aligned**: the sum of the reads 'Aligned concordantly or discordantly 0 time' and 'Aligned 0 time'
+
+- **Unique aligned**: the sum of the reads 'Aligned concordantly 1 time' and 'Aligned 1 time' 
+
+- **Multimaped**: The sum of the reads that were 'Aligned discordantly 1 time' and 'Aligned >1 times'
+
+- **Time**: the total time from the table met report  
 
 For parsing the star output:
-Total aligned: The division bewtwen the sum of 'Uniquely mapped reads number ' and 'Number of reads mapped to multiple loci ' and 'Number of input reads '
-Non aligned: the sum of the reads  and 'Number of reads unmapped: other ', 'Number of reads unmapped: too short ' and 'Number of reads unmapped: too many mismatches '
-Unique aligned: 'Uniquely mapped reads number '
-Multimaped: The sum of the reads that were 'Number of reads mapped to multiple loci ' and 'Number of reads mapped to too many loci '
-Time: The diference between 'Started mapping on ' and 'Finished on '
+
+- **Total aligned**: The division bewtwen the sum of 'Uniquely mapped reads number' and 'Number of reads mapped to multiple loci' and 'Number of input reads'
+
+- **Non aligned**: the sum of 'Number of reads unmapped: other', 'Number of reads unmapped: too short' and 'Number of reads unmapped: too many mismatches'
+
+- **Unique aligned**: 'Uniquely mapped reads number'
+
+- **Multimaped**: The sum of 'Number of reads mapped to multiple loci' and 'Number of reads mapped to too many loci'
+
+- **Time**: The difference between 'Started mapping on' and 'Finished on'
 
 \newpage
 >With that information we can run the alignments while we parse the aligner results: 
 
 ### Clean data 
 
-```{python run_align}
-# | eval: false
-
-# Create the scsipts for the temporary paths and the scripts necessary
+```{python, run_align}
+# Create the scripts for the temporary paths and the scripts necessary
 sp.run(["bash", "src/Generate_tempAlign.sh"])
 # Iterate over all the SRR ids to run de corresponding alingments
 for srr in SRR_ids:
@@ -95,8 +285,6 @@ for srr in SRR_ids:
 ### Raw data
 
 ```{python}
-#| eval: false
-
 sp.run(
     [
         "bash",
@@ -126,9 +314,7 @@ for srr in SRR_ids:
 ``` 
 
 ### Merge the temporary results 
-```{bash merge}
-#| eval: false
-
+```{bash, merge}
 #obtain the header 
 path_temp=temp_align_raw/parsed_results/
 header=$(head -1 "$path_temp"$(ls "$path_temp" | head -1))
@@ -145,9 +331,10 @@ done
 
 With this we obtain the folloeing tables with the performance of the aligners: 
 
-```{python read_tables}
+```{python, read_tables}
 # | echo: false
 # | df-print: default
+# | eval: true
 
 # fist we read the tables
 Clean_df = pd.read_csv("results/alignments/alignments_parsed.csv")
@@ -171,6 +358,7 @@ display(
 
 ```{python}
 # | echo: False
+# | eval: true
 
 display(
     Raw_df.style.format(
@@ -193,8 +381,9 @@ With the performance data provided by the aligners we can see the diferrences no
 
 ### Total aligned vs time 
 The most common metric to evaluate the performance of an aligner is the total aligned reads, this is a key metric because it gives us an idea of how much information we are loosing in the alignment step, but also is important to evaluate the time that the aligner takes to do the alignment because this can be a bottleneck in the data processing.
-```{python analysis}
+```{python, analysis}
 # | echo: false
+# | eval: true
 
 # ========================================================================
 # Total aligned vs time
@@ -248,8 +437,9 @@ Finally the use of clean or raw data appears to not have a big impact in the tot
 
 For seeing why this difference between paired and unpaired reads number of relative mapped reads we can view the non aligned and multimaped reads, this can give us an idea of how much noise the unpaired data is adding to the alignment and how much of this noise is being discriminated when using paired data, this is important beacuse this noise could be false positive mapped reads to those genomics locations.
 
-```{python multimaped}
+```{python, multimaped}
 # | echo: false
+# | eval: true
 
 hisat_df = Clean_df[Clean_df["aligner"] == "hisat"]
 star_df = Clean_df[Clean_df["aligner"] == "star"]
@@ -316,7 +506,13 @@ In this case we can see a clear trade off between the use of paired and unpaired
 
 Finally we can see that star has a better performance than hisat2, this because it has more unique aligned reads and less multimaped reads, so even to the more strict aligment it recovers more unique aligned reads with similar levels of multimapped ones. 
 
+\newpage
+
 ### Conclusion 
 It is a fact that the time and resources invested in paired data aligment is higher than that for unpaired ones, so the question is clear, does it worth to invest this time and resources in the paired data aligment? Something clear is that this investment that in the most cases also involves more expensive experimental desings have a clear improve reducing multimapped reads that can be noise in the data, so the desision of using paired or unpaired data in the alignment step is a trade off between the time and resources invested and the accuracy of the alignment, so it is important to evaluate the specific needs of the experiment and the resources available before making a decision then the data also show us that the selection of the aligner coud be determinat in this king of trade offs and that is also experiment depedent desicion. 
 
-In thiscase we can see that two of the most used aligners does not have a determinat deiference in selecting one or another, but it can be viewed that star has a better performance in the paired data that could be in order of the time and reosurcers expended in those alignments, in the other hand we can se that although star has clearly a better total of alignment-time performance in unpaired data, the multimapping evidence can tell us that using hisat could be a better desicion with a not a big diference also with it constant time performance.
+In thiscase we can see that two of the most used aligners does not have a determinat deiference in selecting one or another, but it can be viewed that star has a better performance in the paired data that could be in order of the time and reosurcers expended in those alignments, in the other hand we can se that although star has clearly a better total of alignment-time performance in unpaired data, the multimapping evidence can tell us that using hisat could be a better desicion with a not a big diference also with it constant time performance. 
+
+
+### Code  
+All the code and extended results are disponible in [Tabula_Muris_Transcriptomic_analysis](https://github.com/MaxHuesca/Tabula_Muris_Trasncriptomics_analysis/tree/main) git hub repository

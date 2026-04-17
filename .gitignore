@@ -1,25 +1,35 @@
-#ignore all the large files that could be contained in the data proccesing and dowload 
+#ignore all the large files that could be contained in the data proccesing and dowload
 #========================================================================
-#Large files from the data directory 
+#Large files from the data directory
 #========================================================================
 data/*.fastq
-data/*.gz 
+data/*.gz
 data/SRR*
 data/indexes
 #========================================================================
-#Results large files 
+#Results large files
 #========================================================================
 results/alignments/*.bam
 results/alignments_raw/*.bam
 results/alignments/*.sam
 results/alignments_raw/*.sam
+results/alignments/clean
+results/bigWig
+results/pseudo_alignments
+#========================================================================
+#SRC temporary and cache files
+#========================================================================
+src/.jupyter_cache
 #========================================================================
 #general extensions of large files or temporary ones
 #========================================================================
 *.out
 *.err
-*.bam 
+*.bam
 *.sam
-*.gz 
-*.fastq 
+*.gz
+*.fastq
 temp*
+/.quarto/
+**/*.quarto_ipynb
+_freeze

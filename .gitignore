@@ -16,6 +16,10 @@ results/alignments_raw/*.sam
 results/alignments/clean
 results/bigWig
 results/pseudo_alignments
+results/fastqc/fastp
+results/fastqc/SRR*
+results/fastqc/multiqc_data
+results/fastqc/multiqc*
 #========================================================================
 #SRC temporary and cache files
 #========================================================================

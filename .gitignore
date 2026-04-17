@@ -20,6 +20,7 @@ results/fastqc/fastp
 results/fastqc/SRR*
 results/fastqc/multiqc_data
 results/fastqc/multiqc*
+results/count_mtr
 #========================================================================
 #SRC temporary and cache files
 #========================================================================

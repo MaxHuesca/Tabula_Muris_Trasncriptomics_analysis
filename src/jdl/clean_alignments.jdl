@@ -1,0 +1,126 @@
+#!/bin/bash 
+#$ -N clean_alignment
+#$ -cwd
+#$ -S /bin/bash
+#$ -o salida-$JOB_NAME-$JOB_ID.out
+#$ -e salida-$JOB_NAME-$JOB_ID.err
+#$ -q default
+#$ -pe smp 3
+#$ -l h_rt=2:00:00 
+
+
+#Arguments 
+#  -p: the path where are stored the aligments bam files
+#  -s: the srr ids for parse those bam files  
+#  -o: the output path for the clean aligments
+
+#parsed the arguments
+while getopts "p:s:o:" opt; do
+  case $opt in
+    p) in_pth="$OPTARG" ;;
+    s) srr_id="$OPTARG" ;;
+    o) out_pth="$OPTARG" ;;
+    \?) echo "Invalid option -$OPTARG" >&2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+
+#check if the input path exist, if not exit with error
+if [ ! -d "$in_pth" ]; then
+  echo "Input path $in_pth does not exist. Exiting."
+  exit 1
+fi 
+
+#check if the user provided a output path, if not make the dafault one
+if [ -z "${out_pth:-}" ]; then
+    out_pth="${in_pth}/clean/"
+fi
+
+#check if the output path exist, if not create it
+mkdir -p "$out_pth"
+ 
+
+#construct the paths for the bam files associated with the srr id
+bam_HIun="${in_pth}/${srr_id}_UN.sort.bam" 
+bam_HIpr="${in_pth}/${srr_id}_PR.sort.bam" 
+bam_SRun="${in_pth}/${srr_id}_strUNAligned.sortedByCoord.out.bam"
+bam_SRpr="${in_pth}/${srr_id}_strPRAligned.sortedByCoord.out.bam"
+
+#make the error path for the aligment process
+err_pth="${out_pth}/errors/"
+
+mkdir -p "$err_pth"
+
+#=====================================================================
+#HIsat2
+#=====================================================================
+
+#make the cleaning using samtools
+job1="cleanA_HIun_${srr_id}"
+echo "samtools view -bq 10 ${bam_HIun} -o ${out_pth}${srr_id}_HIun_clean.bam" | \
+qsub \
+  -N "${job1}" \
+  -cwd \
+  -o "${err_pth}${srr_id}_HIun_.out" \
+  -e "${err_pth}${srr_id}_HIun_.err"
+#run the indexing of the genome 
+echo "samtools index ${out_pth}${srr_id}_HIun_clean.bam" | \
+qsub \
+  -N "index_${srr_id}_HIun" \
+  -cwd \
+  -o "${err_pth}${srr_id}_HIun_index.out" \
+  -e "${err_pth}${srr_id}_HIun_index.err" \
+  -hold_jid "$job1"
+
+job2="cleanA_HIpr_${srr_id}"
+echo "samtools view -bq 10 ${bam_HIpr} -o ${out_pth}${srr_id}_HIpr_clean.bam" | \
+qsub \
+  -N "${job2}" \
+  -cwd \
+  -o "${err_pth}${srr_id}_HIpr.out" \
+  -e "${err_pth}${srr_id}_HIpr.err"
+#run the indexing of the genome 
+echo "samtools index ${out_pth}${srr_id}_HIpr_clean.bam" | \
+qsub \
+  -N "index_${srr_id}_HIpr" \
+  -cwd \
+  -o "${err_pth}${srr_id}_HIpr_index.out" \
+  -e "${err_pth}${srr_id}_HIpr_index.err" \
+  -hold_jid "$job2"
+
+#=====================================================================
+#star
+#=====================================================================
+
+job3="cleanA_SRpr_${srr_id}"
+echo "samtools view -bq 10 ${bam_SRpr} -o ${out_pth}${srr_id}_SRpr_clean.bam" | \
+qsub \
+  -N "${job3}" \
+  -cwd \
+  -o "${err_pth}${srr_id}_SRpr.out" \
+  -e "${err_pth}${srr_id}_SRpr.err"
+#run the indexing of the genome
+echo "samtools index ${out_pth}${srr_id}_SRpr_clean.bam" | \
+qsub \
+  -N "index_${srr_id}_SRpr" \
+  -cwd \
+  -o "${err_pth}${srr_id}_SRpr_index.out" \
+  -e "${err_pth}${srr_id}_SRpr_index.err" \
+  -hold_jid "$job3"
+
+job4="cleanA_SRun_${srr_id}"
+echo "samtools view -bq 10 ${bam_SRun} -o ${out_pth}${srr_id}_SRun_clean.bam" | \
+qsub \
+  -N "${job4}" \
+  -cwd \
+  -o "${err_pth}${srr_id}_SRun.out" \
+  -e "${err_pth}${srr_id}_SRun.err"
+#run the indexing of the genome
+echo "samtools index ${out_pth}${srr_id}_SRun_clean.bam" | \
+qsub \
+  -N "index_${srr_id}_SRun" \
+  -cwd \
+  -o "${err_pth}${srr_id}_SRun_index.out" \
+  -e "${err_pth}${srr_id}_SRun_index.err" \
+  -hold_jid "$job4"

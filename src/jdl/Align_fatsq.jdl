@@ -5,9 +5,9 @@
 #$ -e salida-$JOB_NAME-$JOB_ID.err
 #$ -q default
 #$ -pe smp 3
-#$ -l h_rt=10:00:00 
+#$ -l h_rt=2:00:00 
 
-#this script is used to put in the queue the fastp procces
+#this script is used to put in the queue the aligment procces
 #Arguments
 #  -S: The SRR id 
 #  -t: the path to the temporary folder where the fastp outputs will be stored

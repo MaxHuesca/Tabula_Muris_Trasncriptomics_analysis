@@ -1,0 +1,77 @@
+#!/bin/bash 
+#$ -cwd
+#$ -S /bin/bash
+#$ -o salida-$JOB_NAME-$JOB_ID.out
+#$ -e salida-$JOB_NAME-$JOB_ID.err
+#$ -q default
+#$ -pe smp 1
+#$ -l h_rt=2:00:00 
+
+#this script is used to put in the queue the pseudo-aligment procces using salmon
+#Arguments
+#  -S: The SRR id 
+#  -t: the path to the temporary folder where the fastp outputs will be stored
+#  -e: the path to the the standar errors
+
+#parsed the arguments
+while getopts "S:t:e" opt; do
+  case $opt in
+    S) SRR_id="$OPTARG" ;;
+    t) temp_pth="$OPTARG" ;;
+    e) err_pth="$OPTARG" ;;
+    *) echo "Invalid option: -$OPTARG" ;;
+  esac
+done 
+
+shift $((OPTIND - 1)) 
+
+#verify the values of the optional arguments
+if [[ -z "${temp_pth:-}" ]]; then
+    temp_pth="temp_pseudo_align/"
+fi
+
+#verify if the temp path with the salmon script exists
+if [[ ! -d "${temp_pth:-}" ]]; then
+    echo "Input temp path $temp_pth does not exist. Exiting."
+    exit 1
+fi 
+
+
+if [[ -z "${err_pth:-}" ]]; then
+    err_pth="${temp_pth}align_errors/"
+fi 
+
+mkdir -p $err_pth
+
+#build the data path 
+data_path=data/"$SRR_id"/ 
+
+#build the fastq files paths 
+SRR_1="$data_path""$SRR_id"_1_clean.fastq
+SRR_2="$data_path""$SRR_id"_2_clean.fastq
+
+
+#Now we can make the pseudo-alignmets with the pair and unpaired format 
+#=====================================================================
+#salmon paired
+#=====================================================================
+job1="${SRR_id}_${JOB_ID}_salPR"
+qsub -N "$job1" -o "${err_pth}${job1}.out" -e "${err_pth}${job1}.err" "${temp_pth}sal_pr.sh" $SRR_id $SRR_1 $SRR_2 
+
+#=====================================================================
+#salmon unpaired
+#=====================================================================
+job2="${SRR_id}_${JOB_ID}_salUN"
+qsub -N "$job2" -o "${err_pth}${job2}.out" -e "${err_pth}${job2}.err" "${temp_pth}sal_un.sh" $SRR_id $SRR_1  
+
+#=====================================================================
+#kallisto paired
+#=====================================================================
+job3="${SRR_id}_${JOB_ID}_kalPR"
+qsub -N "$job3" -o "${err_pth}${job3}.out" -e "${err_pth}${job3}.err" -hold_jid "${job1},${job2}" "${temp_pth}kal_pr.sh" $SRR_id $SRR_1 $SRR_2
+
+#=====================================================================
+#kallisto unpaired
+#===================================================================== 
+job4="${SRR_id}_${JOB_ID}_kalUN"
+qsub -N "$job4" -o "${err_pth}${job4}.out" -e "${err_pth}${job4}.err" -hold_jid "${job1},${job2}" "${temp_pth}kal_un.sh" $SRR_id $SRR_1

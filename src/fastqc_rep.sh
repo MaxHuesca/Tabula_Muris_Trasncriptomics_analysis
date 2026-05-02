@@ -22,7 +22,7 @@ data_path="$1"
 if [[ $# -ge 2 ]]; then 
     sufix=$2 
 else 
-    sufix=fastqc
+    sufix=fastq
 fi 
 
 #if the user specified a output dir 

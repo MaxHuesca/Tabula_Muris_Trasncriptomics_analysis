@@ -1,5 +1,5 @@
 ---
-title: "Report 2 Quantification of the Aligments"
+title: "Report 2 Quantification of the Alignments"
 author: "Ismael Maximiliano De Los Santos Huesca"
 date: today
 

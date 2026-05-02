@@ -1,21 +1,25 @@
 ---
-title: "Download and Preprocessing"
+title: "Report 3 Cleaning using a nextflow pipeline"
 author: "Ismael Maximiliano De Los Santos Huesca"
 date: today
 
 format:
   pdf:
+    include-before-body: portada.tex
     documentclass: article
     geometry: margin=2cm
     fontsize: 10pt
     number-sections: true
-    toc: false
     fig-cap-location: bottom
     df-print: kable
+    toc: true
+    toc-title: "Table of Contents"
 
 execute:
   warning: false
   message: false
+  echo: true
+  eval: false
   freeze: auto
 
 project:
@@ -33,8 +37,8 @@ header-includes:
   - \usepackage{float}
   - \usepackage{caption}
   - \captionsetup{font=small}
----
-This script is used to download and preprocess the raw sequencing data from the RNA-seq experiments of the [Ageing hallmarks exhibit organ-specific temporal signatures](https://www.nature.com/articles/s41586-020-2499-y). Here, we focus on the male samples, particularly on the bone tissue at 1 and 24 age stages:
+--- 
+\newpage
 
 ```{python, set_up}
 #| echo: false
@@ -44,193 +48,30 @@ import subprocess as subP
 import os 
 ``` 
 
-### Download data 
-To access the data download, we use the program `fasterq-dump`. This is already installed in the Chaac server, so we can use subprocess from Python in order to make the download. To do so, we need the metadata for the experiment; this is stored in the GEO accession number [GSE132040](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132040).
-
-```{bash, obtain_metadata}
-#| eval: false
-
-#Download the metadata table
-wget https://ftp.ncbi.nlm.nih.gov/geo/series/GSE132nnn/GSE132040/suppl/ \
-GSE132040%5FMACA%5FBulk%5Fmetadata.csv.gz -O data/Tabula_Muris_GSE_metadata.csv.gz 
-
-gunzip data/Tabula_Muris_GSE_metadata.csv.gz
-``` 
-
-```{python, filter_meta}
-# | results: asis
-# | echo: false
-
-# first we have to obtain the srr ids wityh the metada
-metadata_GSE = pd.read_csv("data/Tabula_Muris_GSE_metadata.csv")
-
-print("The columns present in the metadata are:\n")
-for col in metadata_GSE.columns:
-    print(f"- {col}")
-
-# we have to focus in the 'characteristics: age' , 'characteristics: sex' and 'source name'
-metadata_bone_GSE = metadata_GSE[
-    (metadata_GSE["characteristics: age"].isin(["1", "24"]))
-    & (metadata_GSE["characteristics: sex"] == "m")
-    & (metadata_GSE["source name"].str.contains("bone", case=False))
-]
-print(
-    f"The organims from who the samples come form is {list(metadata_bone_GSE['organism'].drop_duplicates())}"
-)
-
-SRR_bone_dict = metadata_bone_GSE.set_index("Sample name")["raw file"].to_dict()
-# now we can obtain the data that we interesd to us (SRR files)
-for experiment in SRR_bone_dict.items():
-    print(f"The SRR id for the experiment {experiment[0]} is {experiment[1]}")
-
-SRR_boneM = list(SRR_bone_dict.values())
-
-print("So the SRR ids are:\n")
-for srr_id in SRR_boneM:
-    print(f"- {srr_id}")
-```
-
-With the IDs now we can download them 
-
-```{python, Download}
-# | eval: false
-
-for srr in SRR_boneM:
-    subP.run(["qsub", "-N", f"Download_{srr}", "src/jdl/Download.jdl", srr])
-```
-
-The downloaded files are in `fastq` format. This is the general file format for short sequence data. The characteristics of this kind of file are that it not only contains the nucleotide sequence resulting from the sequencing reaction, but also has more properties such as the corresponding score for every nucleotide that is sequenced and the IDs for each sequence, having a total of 4 lines for each read sequenced. With this information provided by this format, we can deliver a FastQC (quality control) report with the objective of having the following statistics of our sequences:
-
-- **Per Base sequence quality**
-- **Per tile sequence quality** 
-- **Per sequence quality scores** 
-- **Per base sequence content** 
-- **Per sequence GC content** 
-- **Per base N content** 
-- **Sequence Duplication Levels** 
-
-This information in the reports is critical not only for knowing if the sequencing reaction procedure was done correctly, but also helps us to make decisions like trimming those bases that could have a low quality at the end or start of our sequences (as it frequently occurs with Illumina sequences).
-```{bash, fastqc}
-# | eval: false
-
-#make the fastqc reports 
-qsub -N fastqc_report src/jdl/fastqc_rep.jdl data/
-```
-
-With the analysis product of the FastQC and MultiQC reports, we can make decisions about the preprocessing of the data:
-
-![fastqc_per_base_sequence_quality_plot.png](../results/fastqc/fastqc_per_base_sequence_quality_plot.png) 
-
-After reviewing all the FastQC reports in the HTML view, we can see that the statistics related to the base quality and the sequence length are constant over all the samples and with good results, without having neither low scores nor inconstant sequence lengths. These results are characteristic of current NGS.
-
-### Possible problems
-
-#### Base content
-![fastqc_per_base_sequence_content_plot.png](../results/fastqc/fastqc_per_base_sequence_content_plot.png) 
-
-![fastqc_per_sequence_gc_content_plot.png](../results/fastqc/fastqc_per_sequence_gc_content_plot.png)
-
-One of the first problems we can see across all the samples is the base content related to the first bases in the reads. We can see that the base sequence content is very inconstant, having no proportional content of bases in a 1-15 range. As this problem is constant in all the libraries, it can be solved by trimming the sequences in their first base pairs.
-
-```{bash, clean_fastp}
-# | eval: false
-
-#first iterarte over de data directory 
-for srr_dir in data/*/; do
-    #extract the SRR id 
-    srr_id="${srr_dir%/*}"
-    srr_id="${srr_id##*/}"
-    echo "Procesing the $srr_id fastq files"
-    #iterate over the files that are in the SRR directory 
-    for srr in "$srr_dir"*.fastq; do
-        #now we check if it is the paired end file
-        if [[ $srr == *_1.fastq* ]];then 
-            #we assume taht it has it paired file so we can obtain the id 
-            paired_1=$srr
-            paired_2=${paired_1/_1.fastq/_2.fastq}
-            echo "Files to be proccesed $paired_1 and $paired_2" 
-            qsub -N "$srr_id"_cleaning src/jdl/fastp_cleaning.jdl $paired_1 $paired_2
-            break
-        else 
-            #we are proccesing a unpaired-end file 
-            qsub -N "$srr_id"_cleaning src/jdl/fastp_cleaning.jdl $srr
-        fi
-    done 
-done
-```
-
-#### Duplication and overrepresented sequences 
-![fastqc_sequence_duplication_levels_plot.png](../results/fastqc/fastqc_sequence_duplication_levels_plot.png)
-
-![fastqc_overrepresented_sequences_plot.png](../results/fastqc/fastqc_overrepresented_sequences_plot.png)
-Another warning that all our samples have is the duplication level of sequences. We can see that this statistic can reach 72% of all the reads in some samples. Also, the majority of the SRR files have overrepresented sequences, with only those from the IDs SRR9127396 and SRR9127010 being the ones that do not have this problem.
-
-![fastqc_adapter_content_plot.png](../results/fastqc/fastqc_adapter_content_plot.png)
-In general, all the samples do not have a significant adapter content, with only two having a little representation of Nextera transposase sequence (SRR9126859 and SRR9127369). Despite this, it does not arise a warning.
-
-### General results 
-![fastqc-status-check-heatmap.png](../results/fastqc/fastqc-status-check-heatmap.png)
-In this heatmap representing the problems across the SRR files, we can see that all the warnings are consistent across all the samples with few exceptions that we discussed above. So this gives us the first insight that our data is comparable, obviously with the precise normalization methods and preprocessing ones.
-
-Now we make another time the QC report with the data processed by fastp.
-
-```{bash, fastqc_2}
-# | eval: false
-
-#make the fastqc reports 
-qsub -N fastqc_report src/jdl/fastqc_rep.jdl data clean.fastq results/fastqc/fastp
-``` 
-
-We can see in the FastQC reports that the new trimmed sequences have improved at the start of all sequences after removing the first 15 base pairs of all our SRR files.
-
-Once we have the files processed, we can start with the alignments of the data, so we finally save the relevant information such as the metadata table of our specific samples. 
-```{python, saving}
-# | echo: false
-
-meta_clean = metadata_bone_GSE[
-    [
-        "Sample name",
-        "source name",
-        "characteristics: age",
-        "raw file",
-        "BioSample",
-    ]
-]
-meta_clean.columns = ["src", "name", "months", "srr_id", "biosample"]
-meta_clean["plate"] = meta_clean["src"].str.split("_").str[2]
-meta_clean.to_csv("data/Meatadata_male_bone_1_24M.tsv", sep="\t", index=False)
-
-print(f"The metadata tables looks: \n")
-display(meta_clean.style.hide(axis="index"))
-``` 
-
-Now we this pre-proccesed data and the metada data allready saved we can start with the next step, the same that is align the reads to a reference genome or in other words make all the reads sequenced to have sense in biological terms in the form that they have identification as places in the reference genome of the specie they came from.
-
 # Clean pipeline 
+Additionally, we developed a **Nextflow** pipeline in order to make this preprocessing by the automation of the FastQC reports and also the fastp cleaning. This is made by extracting the features that the FastQC output has in the following way: 
 
-Additionally we developt a **nextflow** pipeline in order to make this preproccesing, by the automatication of the fastQ reports and also the fastp cleaning, this is made by stracting the features that has the fastQC output in the following way: 
+For each category:
+- Basic Statistics
+- Per base sequence quality
+- Per sequence quality scores
+- Per base sequence content
+- Per sequence GC content
+- Per base N content
+- Sequence Length Distribution
+- Sequence Duplication Levels
+- Overrepresented sequences
+- Adapter Content 
 
-For each category  
--Basic Statistics
--Per base sequence quality
--Per sequence quality scores
--Per base sequence content
--Per sequence GC content
--Per base N content
--Sequence Length Distribution
--Sequence Duplication Levels
--Overrepresented sequences
--Adapter Content 
+While searching for `FAIL` in each category in order to assign the following fastp flags: 
 
-While searching for `FAIL` in each category in order to assign the followings fastp flags: 
-
-|QC feature|fasp flag |
+|QC feature|fastp flag |
 |:-------------------------:|:---------------------:|
 |Per base sequence content|--trim_front|
 |Sequence Duplication Levels|--dedup|
-|Overrepresented sequences|overrepresentation_analysis| 
+|Overrepresented sequences|--overrepresentation_analysis| 
 
-For that parsing we are usign the following basic bash script (awk as the main language)
+For that parsing, we are using the following basic bash script (awk as the main language).
 
 ```{bash}
 #| eval: false 
@@ -262,19 +103,28 @@ fi
 This code generates the QC-dependent arguments that we use to clean the fastq files and make sure it works with both paired and unpaired data. 
 > It can be reviewed in more detail in the `src/run_fastp.sh` script 
 
+\newpage
+
 ## Input
 
 For usage, we have to provide a table without a header but with the SRR ID column and the paths for fastq data, so we are using the metadata table to construct it in a: 
 `<srr_id>|<path1>|[path2]` 
 format that we generate:
 
+
 ```{python}
-#build the data frame
-meta_cleaning=pd.DataFrame(meta_clean["srr_id"])
-meta_cleaning["path_1"]="data/"+meta_cleaning["srr_id"]+"/"+meta_cleaning["srr_id"]+"_1.fastq"
-meta_cleaning["path_2"]="data/"+meta_cleaning["srr_id"]+"/"+meta_cleaning["srr_id"]+"_2.fastq"
-#save it as a csv 
+meta_clean = pd.read_csv("data/metadata_clean.csv", sep="\t")
+# build the data frame
+meta_cleaning = pd.DataFrame(meta_clean["srr_id"])
+meta_cleaning["path_1"] = (
+    "data/" + meta_cleaning["srr_id"] + "/" + meta_cleaning["srr_id"] + "_1.fastq"
+)
+meta_cleaning["path_2"] = (
+    "data/" + meta_cleaning["srr_id"] + "/" + meta_cleaning["srr_id"] + "_2.fastq"
+)
+# save it as a csv
 meta_cleaning.to_csv("data/metadata_cleanNF.csv", header=False, index=False)
+display(meta_cleaning)
 ``` 
 
 ## `.config` file
@@ -284,7 +134,7 @@ With the data made now, we can run the Nextflow pipeline and also use a `.config
 - metadata: the path to the input CSV table 
 - conda_env: general Conda environment to run the principal programs
 - fastp_env: the Conda environment where `fastp` is stored 
-- trimF: the number of bases to trim from the front when it is required
+- trimF: the number of bases to trim from the front when it is required 
 
 ```{bash}
 #| eval: false 
@@ -326,7 +176,7 @@ profiles {
         }
     }
 }
-```
+``` 
 
 ## Run and process
 Run it using `nextflow` and the profile `sge`
@@ -336,11 +186,10 @@ nextflow run src/clean_data.nf -c src/clean_data.config -profile sge
 
 ``` 
 
-The pipeline has the following procces that are controled by 2 workflows:  
+The pipeline has the following processes that are controlled by 2 workflows:  
 
-### worlflows 
-To control the execution of all the procces in the pipeline we have to worlkflows, the implicit main workflow and the `report_cleaned` in order to clean the data, as well as 
-make the **QC** reports fromm both: 
+### Workflows 
+To control the execution of all the processes in the pipeline, we have two workflows: the implicit main workflow and the `report_cleaned` workflow in order to clean the data, as well as make the **QC** reports from both: 
 
 ```{groovy}
 //for making the reports of the cleaning step
@@ -393,7 +242,7 @@ workflow {
     //now multiqc the reports 
     multiQC( all_fastqc_raw.map{ tuple("raw_data", it) } )
 } 
-```
+``` 
 
 So in this workflow, first we read the table in order to obtain the paths of the data and the SRR ID, even if they are paired or unpaired ones. With this first **channel** created, we can move the info beyond the processes: 
 
@@ -417,7 +266,7 @@ process fastQC {
     """
 }
 
-```
+``` 
 
 ### fastp 
 The next process, naturally, is to clean the data. This is done by the `fastp` process, which takes as input another **tuple** with the SRR ID and the `.zip` results from the `FastQC` process in the way that we presented above. In addition, the `fastq` paths that we parsed in order to have the files for the cleaning process:
@@ -442,7 +291,7 @@ process fastp {
 
     """
 } 
-```
+``` 
 
 ### MultiQC 
 Finally, the pipeline condenses all the QC reports in a MultiQC step at the end of each **quality control** step with all the `.zip` files generated, and for saving the information, also the tag if it is `clean_data` or `raw_data`:
@@ -467,7 +316,9 @@ process multiQC{
 
 ### Overview
 
-![Pipeline Overview](reports/third/pipeline_flux.png)
+![Pipeline Overview](pipeline_flux.png)
+
+\newpage
 
 ## Results 
 
@@ -560,12 +411,13 @@ results/nf_cleaning
 
 ``` 
 
+\newpage
 
 ## Analysis 
 So now we are able to compare both the MultiQC with the raw data and the MultiQC generated with the pipeline that uses an automatic fastq cleaning process: 
 
 ### Raw data 
-![Raw MultiQC](reports/third/fastqc-status-check-heatmap_raw.png) 
+![Raw MultiQC](fastqc-status-check-heatmap_raw.png) 
 
 We can see that the general problems of the data are: 
 
@@ -576,16 +428,23 @@ We can see that the general problems of the data are:
 
 So the pertinent fastp flags were used in order to clean and account for some of those problems. 
 
+\newpage
+
 ### Original preprocessing 
-![Original Clean MultiQC](reports/third/fastqc-status-check-heatmap_ori.png)
+![Original Clean MultiQC](fastqc-status-check-heatmap_ori.png)
 We can see that as we did not use an analysis of every FastQC report in the previous step in a semi-autonomous way, the corrections related to the previous problems are not contundent or even there are no changes. 
 
 ### Clean data 
-![Clean MultiQC](reports/third/fastqc-status-check-heatmap_clean.png) 
+![Clean MultiQC](fastqc-status-check-heatmap_clean.png) 
 When we performed the cleaning in order with the `FAIL` features present in the `zip` files from the **FastQC** reports, we can see that some problems like the **duplication levels** or the **base sequence content** are fixed or partially fixed. However, this could be a little problem in the **FastQC** as we are cleaning those reads that have low consistency at the beginning of the reads. This is why now not all the libraries have the same length distribution. 
 
 Finally, some problems such as the GC bias are not corrected here but should be in next steps using options from other tools like `salmon`.
 
+\newpage
+
 ## Conclusion 
 While parsing and processing a significant number of samples or libraries from sequencing experiments, it is important to not do them one by one, as the computational tools and frameworks allow parallelization and **sequentialization** of the processes. This is particularly the basis of pipelines and workflow managers like Nextflow. 
 Nextflow is a very useful tool as we can combine dynamic results using **channels**, multiprocessing with their **functions** and **processes**, all controlled by one or more **workflows**. This is particularly useful when extracting statistics from one step in order to be used for cleaning (as is the example of this made pipeline). This combination of the own directories that Nextflow uses and manages in the `work` directory makes it easier to manage the relative and absolute routes in the input step, as Nextflow uses symbolic links to manage all the external files and the output files, in order to not only save the results in a specific path but also to select what outputs of the process we are saving.
+
+## Code  
+All the code and extended results are disponible in [Tabula_Muris_Transcriptomic_analysis](https://github.com/MaxHuesca/Tabula_Muris_Trasncriptomics_analysis/tree/main) git hub repository
